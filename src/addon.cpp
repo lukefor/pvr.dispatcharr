@@ -1060,7 +1060,7 @@ public:
     return PVR_ERROR_NO_ERROR;
   }
 
-  PVR_ERROR GetChannelStreamProperties(const kodi::addon::PVRChannel& channel,
+  PVR_ERROR GetChannelStreamProperties(const kodi::addon::PVRChannel& channel, PVR_SOURCE source,
                                       std::vector<kodi::addon::PVRStreamProperty>& properties) override
   {
     EnsureLoaded();
