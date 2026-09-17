@@ -1,0 +1,104 @@
+name: Build CoreELEC addon
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/coreelec.yml"
+      - "coreelec/**"
+      - "scripts/build-coreelec.sh"
+      - "CMakeLists.txt"
+      - "version.txt"
+      - "pvr.dispatcharr/**"
+      - "src/**"
+  push:
+    branches:
+      - personal
+    paths:
+      - ".github/workflows/coreelec.yml"
+      - "coreelec/**"
+      - "scripts/build-coreelec.sh"
+      - "CMakeLists.txt"
+      - "version.txt"
+      - "pvr.dispatcharr/**"
+      - "src/**"
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coreelec-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Amlogic-ng.arm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      ARCH: arm
+      PROJECT: Amlogic-ce
+      DEVICE: Amlogic-ng
+      COREELEC_DIR: /tmp/CoreELEC
+      COREELEC_SOURCES_DIR: /tmp/coreelec-sources
+      COREELEC_CCACHE_DIR: /tmp/coreelec-ccache
+      OUTPUT_DIR: ${{ github.workspace }}/dist/coreelec
+
+    steps:
+      - name: Checkout addon
+        uses: actions/checkout@v4
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo apt-get clean
+          df -h /
+
+      - name: Install CoreELEC build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            bash bc bzip2 diffutils gawk gcc g++ gperf gzip file patchutils \
+            lzop make patch perl rdfind sed tar unzip wget xz-utils zip zstd \
+            libc6-dev libncurses-dev libjson-perl libparse-yapp-perl \
+            libxml-parser-perl xfonts-utils xsltproc default-jre-headless \
+            python3 rpcsvc-proto
+
+      - name: Restore CoreELEC downloads and compiler cache
+        id: coreelec_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.COREELEC_SOURCES_DIR }}
+            ${{ env.COREELEC_CCACHE_DIR }}
+          key: coreelec-21-amlogic-ng-arm-${{ hashFiles('coreelec/**', 'scripts/build-coreelec.sh') }}
+          restore-keys: |
+            coreelec-21-amlogic-ng-arm-
+
+      - name: Build installable addon ZIP
+        run: ./scripts/build-coreelec.sh
+
+      - name: Save CoreELEC downloads and compiler cache
+        if: always() && steps.coreelec_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.COREELEC_SOURCES_DIR }}
+            ${{ env.COREELEC_CCACHE_DIR }}
+          key: ${{ steps.coreelec_cache.outputs.cache-primary-key }}
+
+      - name: Show artifact and disk usage
+        if: always()
+        run: |
+          find dist/coreelec -maxdepth 1 -type f -name '*.zip' -ls 2>/dev/null || true
+          df -h /
+
+      - name: Upload CoreELEC addon
+        uses: actions/upload-artifact@v4
+        with:
+          name: pvr.dispatcharr-coreelec-amlogic-ng-arm
+          path: dist/coreelec/*.zip
+          if-no-files-found: error
+          retention-days: 14
