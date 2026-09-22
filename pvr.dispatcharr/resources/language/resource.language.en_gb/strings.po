@@ -121,3 +121,11 @@ msgctxt "#30406"
 msgid "Use inputstream.ffmpegdirect for catchup (enables seeking)"
 msgstr "Use inputstream.ffmpegdirect for catchup (enables seeking)"
 
+msgctxt "#30500"
+msgid "EPG"
+msgstr "EPG"
+
+msgctxt "#30501"
+msgid "Maximum XMLTV download size (MB)"
+msgstr "Maximum XMLTV download size (MB)"
+

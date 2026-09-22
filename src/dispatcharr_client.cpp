@@ -4,11 +4,13 @@
 #include <curl/curl.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -22,6 +24,14 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
   size_t totalSize = size * nmemb;
   std::string* str = static_cast<std::string*>(userp);
   str->append(static_cast<char*>(contents), totalSize);
+  return totalSize;
+}
+
+static size_t HeaderCallback(char* buffer, size_t size, size_t nitems, void* userp)
+{
+  size_t totalSize = size * nitems;
+  std::string* str = static_cast<std::string*>(userp);
+  str->append(buffer, totalSize);
   return totalSize;
 }
 
@@ -200,18 +210,41 @@ std::string JsonEscape(const std::string& input)
 
 time_t ParseIsoTime(const std::string& iso)
 {
-  // 2026-01-23T10:00:00Z
-  if (iso.empty()) return 0;
+  // Dispatcharr returns timezone-aware ISO 8601 values. Convert them to UTC;
+  // mktime() would incorrectly interpret the fields in Kodi's local timezone.
+  if (iso.size() < 19)
+    return 0;
+
   struct tm tm = {};
-  if (iso.size() >= 19) {
-    sscanf(iso.c_str(), "%d-%d-%dT%d:%d:%d", 
-           &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
-           &tm.tm_hour, &tm.tm_min, &tm.tm_sec);
-    tm.tm_year -= 1900;
-    tm.tm_mon -= 1;
-    return mktime(&tm);
+  if (sscanf(iso.c_str(), "%d-%d-%dT%d:%d:%d",
+             &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
+             &tm.tm_hour, &tm.tm_min, &tm.tm_sec) != 6)
+    return 0;
+
+  tm.tm_year -= 1900;
+  tm.tm_mon -= 1;
+#ifdef _WIN32
+  time_t result = _mkgmtime(&tm);
+#else
+  time_t result = timegm(&tm);
+#endif
+  if (result == static_cast<time_t>(-1))
+    return 0;
+
+  // A positive offset means the wall clock is ahead of UTC, so subtract it.
+  if (iso.size() >= 25 && (iso[19] == '+' || iso[19] == '-') && iso[22] == ':')
+  {
+    int offsetHours = 0;
+    int offsetMinutes = 0;
+    if (sscanf(iso.c_str() + 20, "%2d:%2d", &offsetHours, &offsetMinutes) == 2 &&
+        offsetHours <= 23 && offsetMinutes <= 59)
+    {
+      const time_t offset = static_cast<time_t>(offsetHours * 3600 + offsetMinutes * 60);
+      result += (iso[19] == '+') ? -offset : offset;
+    }
   }
-  return 0;
+
+  return result;
 }
 
 std::string TimeToIso(time_t t)
@@ -302,8 +335,13 @@ std::string Client::GetBaseUrl() const
   return ss.str();
 }
 
-Client::HttpResponse Client::Request(const std::string& method, const std::string& endpoint, const std::string& jsonBody)
+Client::HttpResponse Client::Request(const std::string& method,
+                                     const std::string& endpoint,
+                                     const std::string& jsonBody,
+                                     bool retryAuth,
+                                     const std::string& rangeHeader)
 {
+  std::lock_guard<std::recursive_mutex> requestLock(m_requestMutex);
   HttpResponse resp;
   std::string url = GetBaseUrl() + endpoint;
   
@@ -328,7 +366,9 @@ Client::HttpResponse Client::Request(const std::string& method, const std::strin
   // Set write callback
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp.body);
-  
+  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, HeaderCallback);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, &resp.headers);
+
   // Set headers
   struct curl_slist* headers = nullptr;
   headers = curl_slist_append(headers, "Content-Type: application/json");
@@ -336,6 +376,10 @@ Client::HttpResponse Client::Request(const std::string& method, const std::strin
   if (!m_accessToken.empty()) {
     std::string authHeader = "Authorization: Bearer " + m_accessToken;
     headers = curl_slist_append(headers, authHeader.c_str());
+  }
+  if (!rangeHeader.empty()) {
+    std::string rangeHeaderLine = "Range: " + rangeHeader;
+    headers = curl_slist_append(headers, rangeHeaderLine.c_str());
   }
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   
@@ -361,7 +405,8 @@ Client::HttpResponse Client::Request(const std::string& method, const std::strin
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
     resp.statusCode = static_cast<int>(httpCode);
     kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr: Response code: %d", resp.statusCode);
-    kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr: Response: %s", resp.body.substr(0, 500).c_str());
+    if (endpoint.find("/hls/seg_") == std::string::npos && rangeHeader.empty())
+      kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr: Response: %s", resp.body.substr(0, 500).c_str());
   } else {
     kodi::Log(ADDON_LOG_ERROR, "pvr.dispatcharr: curl_easy_perform failed: %s", curl_easy_strerror(res));
     resp.statusCode = 0;
@@ -369,12 +414,25 @@ Client::HttpResponse Client::Request(const std::string& method, const std::strin
   
   curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
+
+  // If Dispatcharr rejects the cached access token, obtain a new one and retry
+  // the request exactly once.
+  if (resp.statusCode == 401 && retryAuth && !m_accessToken.empty())
+  {
+    kodi::Log(ADDON_LOG_INFO,
+              "pvr.dispatcharr: Access token rejected; re-authenticating and retrying request");
+    m_accessToken.clear();
+
+    if (EnsureToken())
+      return Request(method, endpoint, jsonBody, false, rangeHeader);
+  }
   
   return resp;
 }
 
 bool Client::EnsureToken()
 {
+  std::lock_guard<std::recursive_mutex> requestLock(m_requestMutex);
   if (!m_accessToken.empty()) return true;
   
   std::stringstream ss;
@@ -385,7 +443,6 @@ bool Client::EnsureToken()
   std::string url = GetBaseUrl() + "/api/accounts/token/";
   kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr: EnsureToken - URL: %s", url.c_str());
   kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr: EnsureToken - Username: %s", m_settings.username.c_str());
-  kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr: EnsureToken - POST body: %s", jsonBody.c_str());
   
   // Use libcurl directly for authentication
   CURL* curl = curl_easy_init();
@@ -419,7 +476,6 @@ bool Client::EnsureToken()
     
     kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr: EnsureToken - HTTP code: %ld", httpCode);
     kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr: EnsureToken - Response body length: %zu", responseBody.size());
-    kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr: EnsureToken - Response body (first 500 chars): %s", responseBody.substr(0, 500).c_str());
     
     if (httpCode == 200) {
       std::string token;
@@ -697,6 +753,42 @@ bool Client::FetchRecordings(std::vector<Recording>& outRecordings)
           ExtractStringField(customProps, "status", r.status);
           // Extract poster_url for cover art
           ExtractStringField(customProps, "poster_url", r.iconPath);
+
+          std::string kodiEpgUid;
+          if (ExtractStringField(customProps, "kodi_epg_uid", kodiEpgUid)) {
+              const bool digitsOnly = !kodiEpgUid.empty() &&
+                  std::all_of(kodiEpgUid.begin(), kodiEpgUid.end(),
+                              [](unsigned char c) { return std::isdigit(c) != 0; });
+              errno = 0;
+              char* end = nullptr;
+              const unsigned long value = std::strtoul(kodiEpgUid.c_str(), &end, 10);
+              if (digitsOnly && errno == 0 && end && *end == '\0' &&
+                  value <= std::numeric_limits<unsigned int>::max()) {
+                  r.kodiEpgUid = static_cast<unsigned int>(value);
+              } else {
+                  kodi::Log(ADDON_LOG_WARNING,
+                            "pvr.dispatcharr: Invalid Kodi EPG UID for recording %d",
+                            r.id);
+              }
+          }
+
+          std::string kodiChannelUid;
+          if (ExtractStringField(customProps, "kodi_channel_uid", kodiChannelUid)) {
+              const bool digitsOnly = !kodiChannelUid.empty() &&
+                  std::all_of(kodiChannelUid.begin(), kodiChannelUid.end(),
+                              [](unsigned char c) { return std::isdigit(c) != 0; });
+              errno = 0;
+              char* end = nullptr;
+              const unsigned long value = std::strtoul(kodiChannelUid.c_str(), &end, 10);
+              if (digitsOnly && errno == 0 && end && *end == '\0' && value > 0 &&
+                  value <= static_cast<unsigned long>(std::numeric_limits<int>::max())) {
+                  r.kodiChannelUid = static_cast<int>(value);
+              } else {
+                  kodi::Log(ADDON_LOG_WARNING,
+                            "pvr.dispatcharr: Invalid Kodi channel UID for recording %d",
+                            r.id);
+              }
+          }
       }
       
       // Default to "scheduled" if status is missing (e.g. newly created recordings
@@ -705,13 +797,119 @@ bool Client::FetchRecordings(std::vector<Recording>& outRecordings)
           r.status = "scheduled";
       }
       
-      // Stream URL
-      // /api/channels/recordings/{id}/file/
-      r.streamUrl = GetBaseUrl() + "/api/channels/recordings/" + std::to_string(r.id) + "/file/";
-      
       outRecordings.push_back(r);
     }
   });
+  return true;
+}
+
+bool Client::GetRecording(int id, Recording& outRecording)
+{
+  std::vector<Recording> recordings;
+  if (!FetchRecordings(recordings))
+    return false;
+  const auto it = std::find_if(recordings.begin(), recordings.end(),
+                               [id](const Recording& value) { return value.id == id; });
+  if (it == recordings.end())
+    return false;
+  outRecording = *it;
+  return true;
+}
+
+bool Client::FetchActiveRecordingManifest(int id, std::string& outManifest)
+{
+  outManifest.clear();
+  if (!EnsureToken())
+    return false;
+  const auto response = Request(
+      "GET", "/api/channels/recordings/" + std::to_string(id) + "/hls/index.m3u8");
+  if (response.statusCode != 200 || response.body.find("#EXTM3U") == std::string::npos)
+    return false;
+  outManifest = response.body;
+  return true;
+}
+
+bool Client::DownloadRecordingSegment(int id, const std::string& uri, std::string& outData)
+{
+  outData.clear();
+  if (!EnsureToken())
+    return false;
+
+  std::string endpoint = uri;
+  if (endpoint.rfind("http://", 0) == 0 || endpoint.rfind("https://", 0) == 0)
+  {
+    // Dispatcharr may advertise its public URL without the explicit/default
+    // port present in the add-on setting. Extract only the path and fetch it
+    // from our configured server, so credentials can never be sent to the
+    // playlist-provided authority.
+    const size_t scheme = endpoint.find("://");
+    const size_t path = endpoint.find('/', scheme + 3);
+    if (path == std::string::npos)
+      return false;
+    endpoint.erase(0, path);
+  }
+  else if (endpoint.empty() || endpoint.front() != '/')
+    endpoint = "/api/channels/recordings/" + std::to_string(id) + "/hls/" + endpoint;
+
+  // Authorization headers are refreshed automatically by Request(). Discard
+  // any short-lived token copied into the playlist URI.
+  const size_t query = endpoint.find('?');
+  if (query != std::string::npos)
+    endpoint.erase(query);
+  const std::string allowedPrefix = "/api/channels/recordings/" +
+                                    std::to_string(id) + "/hls/";
+  if (endpoint.rfind(allowedPrefix, 0) != 0 || endpoint.find("..") != std::string::npos)
+  {
+    kodi::Log(ADDON_LOG_ERROR,
+              "pvr.dispatcharr: Refusing unexpected recording segment path '%s'",
+              endpoint.c_str());
+    return false;
+  }
+  const auto response = Request("GET", endpoint);
+  if (response.statusCode != 200 || response.body.empty())
+    return false;
+  outData = response.body;
+  return true;
+}
+
+bool Client::FetchRecordingFileRange(int id, int64_t offset, int64_t length,
+                                     std::string& outData, int64_t& outTotalLength)
+{
+  outData.clear();
+  outTotalLength = 0;
+  if (length <= 0)
+    return false;
+  if (!EnsureToken())
+    return false;
+
+  std::ostringstream range;
+  range << "bytes=" << offset << "-" << (offset + length - 1);
+  const auto response = Request(
+      "GET", "/api/channels/recordings/" + std::to_string(id) + "/file/", "", true, range.str());
+  if (response.statusCode != 200 && response.statusCode != 206)
+    return false;
+
+  // Parse "Content-Range: bytes 0-0/12345" to learn the recording's total
+  // size. std::stoll stops at the first non-digit character, so trailing
+  // "\r\n" and any headers after it are harmlessly ignored.
+  const size_t headerPos = response.headers.find("Content-Range:");
+  if (headerPos != std::string::npos)
+  {
+    const size_t slash = response.headers.find('/', headerPos);
+    if (slash != std::string::npos)
+    {
+      try { outTotalLength = std::stoll(response.headers.substr(slash + 1)); }
+      catch (...) { outTotalLength = 0; }
+    }
+  }
+  if (outTotalLength <= 0)
+  {
+    // Server ignored the Range request (e.g. HTTP 200) and returned the
+    // whole file; treat what we got as the complete recording.
+    outTotalLength = static_cast<int64_t>(response.body.size());
+  }
+
+  outData = std::move(response.body);
   return true;
 }
 
@@ -727,14 +925,25 @@ bool Client::DeleteRecording(int id)
   return success;
 }
 
-bool Client::ScheduleRecording(int channelId, time_t startTime, time_t endTime, const std::string& title)
+bool Client::ScheduleRecording(int channelId,
+                               time_t startTime,
+                               time_t endTime,
+                               const std::string& title,
+                               unsigned int kodiEpgUid,
+                               int kodiChannelUid)
 {
   if (!EnsureToken()) return false;
   std::stringstream ss;
   ss << "{\"channel\":" << channelId 
      << ",\"start_time\":\"" << TimeToIso(startTime) << "\""
      << ",\"end_time\":\"" << TimeToIso(endTime) << "\""
-     << ",\"custom_properties\":{\"program\":{\"title\":\"" << JsonEscape(title) << "\"}} }";
+     << ",\"custom_properties\":{\"program\":{\"title\":\"" << JsonEscape(title) << "\"}";
+  if (kodiEpgUid != 0 && kodiChannelUid != 0)
+  {
+    ss << ",\"kodi_epg_uid\":\"" << kodiEpgUid << "\""
+       << ",\"kodi_channel_uid\":\"" << kodiChannelUid << "\"";
+  }
+  ss << "}}";
   
   auto resp = Request("POST", "/api/channels/recordings/", ss.str());
   // HTTP 201 Created is the correct success response for POST

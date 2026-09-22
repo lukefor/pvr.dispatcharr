@@ -125,6 +125,13 @@ cmake -S "$ROOT_DIR" -B "$BUILD_DIR" \
   ${CMAKE_EXTRA_ARGS:-}
 
 cmake --build "$BUILD_DIR" --config Release
+
+# Skip running tests when cross-compiling (e.g. Android): the test binaries
+# are built for the target architecture, not the build host, and can't execute here.
+if [[ "${CMAKE_EXTRA_ARGS:-}" != *CMAKE_TOOLCHAIN_FILE* ]]; then
+  ctest --test-dir "$BUILD_DIR" --build-config Release --output-on-failure
+fi
+
 cmake --install "$BUILD_DIR"
 
 # Update addon.xml version if VERSION is set

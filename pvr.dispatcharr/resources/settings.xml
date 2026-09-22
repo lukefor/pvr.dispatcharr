@@ -190,5 +190,20 @@
         </setting>
       </group>
     </category>
+
+    <category id="epg" label="30500" help="">
+      <group id="1">
+        <setting id="xmltv_max_size_mb" type="integer" label="30501" help="">
+          <level>0</level>
+          <default>300</default>
+          <constraints>
+            <minimum>50</minimum>
+            <step>50</step>
+            <maximum>2000</maximum>
+          </constraints>
+          <control type="edit" format="integer" delayed="false" />
+        </setting>
+      </group>
+    </category>
   </section>
 </settings>

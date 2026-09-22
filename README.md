@@ -259,6 +259,18 @@ KODI_ADDON_SDK=/path/to/kodi-addon-dev-kit ./build.sh
 ./build.sh --install-kodi --kodi-addons-dir "/path/to/Kodi/addons"
 ```
 
+### CoreELEC 21
+
+To cross-compile an installable `Amlogic-ng.arm` ZIP with CoreELEC's own
+toolchain:
+
+```bash
+./scripts/build-coreelec.sh
+```
+
+See [coreelec/README.md](coreelec/README.md) for host requirements, build
+overrides, and instructions for running the included GitHub Actions workflow.
+
 The built addon package is located at `dist/pvr.dispatcharr/`.
 
 ## Development

@@ -2,12 +2,14 @@
 
 #include <kodi/Filesystem.h>
 #include <kodi/General.h>
+#include <kodi/addon-instance/PVR.h>
 #include <pugixml.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <limits>
 #include <cstdlib>
 #include <string>
@@ -31,7 +33,10 @@
 namespace
 {
 constexpr const char* kDefaultAddonUserAgent = "DispatcharrKodiAddon";
-constexpr size_t kMaxHttpBodyBytes = 50 * 1024 * 1024; // cap responses to protect memory (XMLTV can be large)
+constexpr size_t kMaxHttpBodyBytes = 50 * 1024 * 1024; // cap JSON API responses to protect memory
+// XMLTV guides legitimately run much larger than JSON API responses (many
+// channels x many days of uncompressed program data). Their ceiling is
+// user-configurable (Settings::xmltvMaxSizeMb) rather than a fixed constant.
 
 std::string Trim(std::string s)
 {
@@ -49,6 +54,207 @@ std::string ToLower(std::string s)
     return static_cast<char>(std::tolower(c));
   });
   return s;
+}
+
+void ParseProgrammeGenre(const pugi::xml_node& programmeNode, xtream::EpgEntry& entry)
+{
+  std::vector<std::string> categories;
+  for (const auto& categoryNode : programmeNode.children("category"))
+  {
+    const std::string category = Trim(categoryNode.child_value());
+    if (category.empty())
+      continue;
+
+    // Kodi uses EPG_STRING_TOKEN_SEPARATOR (a comma) between free-text genres.
+    if (!entry.genreString.empty())
+      entry.genreString += EPG_STRING_TOKEN_SEPARATOR;
+    entry.genreString += category;
+    categories.push_back(ToLower(category));
+  }
+
+  const auto hasAny = [&categories](std::initializer_list<const char*> values) {
+    for (const auto& category : categories)
+    {
+      for (const char* value : values)
+      {
+        if (category == value)
+          return true;
+      }
+    }
+    return false;
+  };
+
+  // Prefer specific categories over generic XMLTV categories such as "Series".
+  // Sports has the highest priority because feeds often also label games as series.
+  if (hasAny({"football", "soccer"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SPORTS;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SPORTS_FOOTBALL_SOCCER;
+  }
+  else if (hasAny({"tennis"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SPORTS;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SPORTS_TENNIS_SQUASH;
+  }
+  else if (hasAny({"volleyball", "basketball"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SPORTS;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SPORTS_TEAMSPORTS;
+  }
+  else if (hasAny({"track/field"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SPORTS;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SPORTS_ATHLETICS;
+  }
+  else if (hasAny({"auto racing", "motorcycle racing"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SPORTS;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SPORTS_MOTORSPORT;
+  }
+  else if (hasAny({"sailing"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SPORTS;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SPORTS_WATERSPORT;
+  }
+  else if (hasAny({"sports talk"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SPORTS;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SPORTS_SPORTS_MAGAZINES;
+  }
+  else if (hasAny({"sports", "playoff sports", "golf", "fishing"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SPORTS;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SPORTS_GENERAL;
+  }
+  else if (hasAny({"weather"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_NEWSCURRENTAFFAIRS;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_NEWSCURRENTAFFAIRS_WEATHER;
+  }
+  else if (hasAny({"newsmagazine"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_NEWSCURRENTAFFAIRS;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_NEWSCURRENTAFFAIRS_MAGAZINE;
+  }
+  else if (hasAny({"news", "political news satire & talk"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_NEWSCURRENTAFFAIRS;
+    entry.genreSubType = hasAny({"interview", "debate"})
+                             ? EPG_EVENT_CONTENTSUBMASK_NEWSCURRENTAFFAIRS_DISCUSSION_INTERVIEW_DEBATE
+                             : EPG_EVENT_CONTENTSUBMASK_NEWSCURRENTAFFAIRS_GENERAL;
+  }
+  else if (hasAny({"children", "animated"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_CHILDRENYOUTH;
+    entry.genreSubType = hasAny({"animated"})
+                             ? EPG_EVENT_CONTENTSUBMASK_CHILDRENYOUTH_CARTOONS_PUPPETS
+                             : EPG_EVENT_CONTENTSUBMASK_CHILDRENYOUTH_GENERAL;
+  }
+  else if (hasAny({"game show"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SHOW;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SHOW_GAMESHOW_QUIZ_CONTEST;
+  }
+  else if (hasAny({"variety"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SHOW;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SHOW_VARIETY_SHOW;
+  }
+  else if (hasAny({"talk", "interview", "debate"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SHOW;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SHOW_TALK_SHOW;
+  }
+  else if (hasAny({"reality", "competition reality", "entertainment"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SHOW;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SHOW_GENERAL;
+  }
+  else if (hasAny({"crime", "crime drama", "mystery"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_MOVIEDRAMA;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_MOVIEDRAMA_DETECTIVE_THRILLER;
+  }
+  else if (hasAny({"action", "adventure"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_MOVIEDRAMA;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_MOVIEDRAMA_ADVENTURE_WESTERN_WAR;
+  }
+  else if (hasAny({"comedy", "sitcom"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_MOVIEDRAMA;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_MOVIEDRAMA_COMEDY;
+  }
+  else if (hasAny({"soap"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_MOVIEDRAMA;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_MOVIEDRAMA_SOAP_MELODRAMA_FOLKLORIC;
+  }
+  else if (hasAny({"romance"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_MOVIEDRAMA;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_MOVIEDRAMA_ROMANCE;
+  }
+  else if (hasAny({"movie", "drama", "docudrama"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_MOVIEDRAMA;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_MOVIEDRAMA_GENERAL;
+  }
+  else if (hasAny({"music", "dance"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_MUSICBALLETDANCE;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_MUSICBALLETDANCE_GENERAL;
+  }
+  else if (hasAny({"religious"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_ARTSCULTURE;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_ARTSCULTURE_RELIGION;
+  }
+  else if (hasAny({"politics", "public affairs", "community", "consumer", "law"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SOCIALPOLITICALECONOMICS;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SOCIALPOLITICALECONOMICS_GENERAL;
+  }
+  else if (hasAny({"nature", "animals", "environment"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_EDUCATIONALSCIENCE;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_EDUCATIONALSCIENCE_NATURE_ANIMALS_ENVIRONMENT;
+  }
+  else if (hasAny({"medical", "health"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_EDUCATIONALSCIENCE;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_EDUCATIONALSCIENCE_MEDICINE_PHYSIOLOGY_PSYCHOLOGY;
+  }
+  else if (hasAny({"documentary", "educational", "science", "history", "american history"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_EDUCATIONALSCIENCE;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_EDUCATIONALSCIENCE_GENERAL;
+  }
+  else if (hasAny({"travel"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_LEISUREHOBBIES;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_LEISUREHOBBIES_TOURISM_TRAVEL;
+  }
+  else if (hasAny({"shopping"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_LEISUREHOBBIES;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_LEISUREHOBBIES_ADVERTISEMENT_SHOPPING;
+  }
+  else if (hasAny({"house/garden", "home improvement"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_LEISUREHOBBIES;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_LEISUREHOBBIES_GARDENING;
+  }
+  else if (hasAny({"pets", "fashion", "how-to", "self improvement"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_LEISUREHOBBIES;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_LEISUREHOBBIES_GENERAL;
+  }
+  else if (hasAny({"special"}))
+  {
+    entry.genreType = EPG_EVENT_CONTENTMASK_SPECIAL;
+    entry.genreSubType = EPG_EVENT_CONTENTSUBMASK_SPECIAL_GENERAL;
+  }
 }
 
 std::string NormalizeChannelNameForEpg(const std::string& in)
@@ -361,7 +567,8 @@ bool ExtractSettingBool(const std::string& xml, const char* id, bool& out)
 
 HttpResult HttpGet(const std::string& url,
                    const std::string& userAgent,
-                   int timeoutSeconds)
+                   int timeoutSeconds,
+                   size_t maxBodyBytes = kMaxHttpBodyBytes)
 {
   HttpResult result;
 
@@ -388,10 +595,10 @@ HttpResult HttpGet(const std::string& url,
     return result;
 
   result.protocol = file.GetPropertyValue(ADDON_FILE_PROPERTY_RESPONSE_PROTOCOL, "");
-  if (!ReadAll(file, result.body, kMaxHttpBodyBytes))
+  if (!ReadAll(file, result.body, maxBodyBytes))
   {
     kodi::Log(ADDON_LOG_ERROR, "pvr.dispatcharr: HTTP response exceeded %zu bytes for %s",
-              kMaxHttpBodyBytes, redacted.c_str());
+              maxBodyBytes, redacted.c_str());
     result.protocol = result.protocol.empty() ? std::string("Body too large") : result.protocol;
     return result;
   }
@@ -826,6 +1033,7 @@ Settings LoadSettings()
   kodi::addon::GetSettingString("custom_user_agent", s.customUserAgent);
   kodi::addon::GetSettingBoolean("enable_play_from_start", s.enablePlayFromStart);
   kodi::addon::GetSettingBoolean("use_ffmpegdirect", s.useFFmpegDirect);
+  kodi::addon::GetSettingInt("xmltv_max_size_mb", s.xmltvMaxSizeMb);
 
   // Kodi sometimes doesn't transfer settings to binary addons early during startup.
   // Always read persisted settings.xml from addon_data and overlay any values found.
@@ -850,6 +1058,7 @@ Settings LoadSettings()
         s.customUserAgent = tmp;
       ExtractSettingBool(xml, "enable_play_from_start", s.enablePlayFromStart);
       ExtractSettingBool(xml, "use_ffmpegdirect", s.useFFmpegDirect);
+      ExtractSettingInt(xml, "xmltv_max_size_mb", s.xmltvMaxSizeMb);
     }
   }
   return s;
@@ -1078,8 +1287,10 @@ FetchResult FetchXMLTVEpg(const Settings& settings, std::string& xmltvData)
                     "&password=" + UrlEncode(settings.password);
 
   const std::string ua = EffectiveUserAgent(settings);
-  const HttpResult http = HttpGet(url, ua, settings.timeoutSeconds);
-  
+  const int configuredMb = settings.xmltvMaxSizeMb > 0 ? settings.xmltvMaxSizeMb : 300;
+  const size_t maxBytes = static_cast<size_t>(configuredMb) * 1024 * 1024;
+  const HttpResult http = HttpGet(url, ua, settings.timeoutSeconds, maxBytes);
+
   if (!http.ok)
     return {false, http.protocol.empty() ? std::string("Failed to fetch XMLTV") : http.protocol};
 
@@ -1347,10 +1558,8 @@ bool ParseXMLTV(const std::string& xmltvData,
         entry.iconPath = srcAttr;
     }
 
-    // Parse category (genre)
-    const auto& categoryNode = programmeNode.child("category");
-    if (categoryNode)
-      entry.genreString = categoryNode.child_value();
+    // Preserve all XMLTV categories and map recognized values to Kodi's DVB genres.
+    ParseProgrammeGenre(programmeNode, entry);
 
     // Add entry to each mapped stream's EPG (keyed by start time)
     for (const auto& mappedId : mapIt->second)

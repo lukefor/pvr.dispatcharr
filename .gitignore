@@ -2,3 +2,6 @@ build/
 dist/
 .DS_Store
 kodi.log
+.coreelec-build/
+build-flatpak/
+stage-flatpak/

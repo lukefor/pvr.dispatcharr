@@ -22,6 +22,8 @@ struct Settings
   int catchupStartOffsetHours = 0;
   bool enablePlayFromStart = true;
   bool useFFmpegDirect = false;
+
+  int xmltvMaxSizeMb = 300; // Ceiling for the XMLTV EPG download, in megabytes.
 };
 
 struct TestResult

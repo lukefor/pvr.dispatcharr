@@ -1,0 +1,208 @@
+diff --git a/packages/compress/7-zip/package.mk b/packages/compress/7-zip/package.mk
+index cba9aea..81c340b 100644
+--- a/packages/compress/7-zip/package.mk
++++ b/packages/compress/7-zip/package.mk
+@@ -21,7 +21,11 @@ pre_build_host() {
+
+ make_host() {
+   # compile without 7-Zip's assembler code (not required in toolchain)
+-  make CXX=${CXX} CC=${CC} -f makefile.gcc -C ${PKG_BUILD}/.${HOST_NAME}/CPP/7zip/Bundles/Alone
++  # GCC 16 diagnoses an unused loop counter in 7-Zip 23.01.
++  make CXX=${CXX} CC=${CC} \
++       CXX_WARN_FLAGS="-Wno-unused-but-set-variable" \
++       -f makefile.gcc \
++       -C ${PKG_BUILD}/.${HOST_NAME}/CPP/7zip/Bundles/Alone
+ }
+
+ makeinstall_host() {
+
+diff --git a/packages/devel/autoconf/package.mk b/packages/devel/autoconf/package.mk
+--- a/packages/devel/autoconf/package.mk
++++ b/packages/devel/autoconf/package.mk
+@@ -6,7 +6,7 @@ PKG_VERSION="2.71"
+ PKG_SHA256="f14c83cfebcc9427f2c3cea7258bd90df972d92eb26752da4ddad81c87a0faa4"
+ PKG_LICENSE="GPL"
+ PKG_SITE="http://sources.redhat.com/autoconf/"
+-PKG_URL="http://ftpmirror.gnu.org/autoconf/${PKG_NAME}-${PKG_VERSION}.tar.xz"
++PKG_URL="https://ftp.gnu.org/gnu/autoconf/${PKG_NAME}-${PKG_VERSION}.tar.xz"
+ PKG_DEPENDS_HOST="ccache:host m4:host gettext:host"
+ PKG_LONGDESC="A GNU tool for automatically configuring source code."
+
+diff --git a/packages/devel/mpc/package.mk b/packages/devel/mpc/package.mk
+--- a/packages/devel/mpc/package.mk
++++ b/packages/devel/mpc/package.mk
+@@ -6,7 +6,7 @@ PKG_VERSION="1.3.1"
+ PKG_SHA256="ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8"
+ PKG_LICENSE="LGPL"
+ PKG_SITE="https://www.multiprecision.org"
+-PKG_URL="http://ftpmirror.gnu.org/mpc/${PKG_NAME}-${PKG_VERSION}.tar.gz"
++PKG_URL="https://ftp.gnu.org/gnu/mpc/${PKG_NAME}-${PKG_VERSION}.tar.gz"
+ PKG_DEPENDS_HOST="ccache:host gmp:host mpfr:host"
+ PKG_LONGDESC="A C library for the arithmetic of complex numbers with arbitrarily high precision and correct rounding of the result."
+
+diff --git a/packages/devel/mpfr/package.mk b/packages/devel/mpfr/package.mk
+--- a/packages/devel/mpfr/package.mk
++++ b/packages/devel/mpfr/package.mk
+@@ -6,7 +6,7 @@ PKG_VERSION="4.2.1"
+ PKG_SHA256="277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2"
+ PKG_LICENSE="LGPL"
+ PKG_SITE="http://www.mpfr.org/"
+-PKG_URL="http://ftpmirror.gnu.org/mpfr/${PKG_NAME}-${PKG_VERSION}.tar.xz"
++PKG_URL="https://ftp.gnu.org/gnu/mpfr/${PKG_NAME}-${PKG_VERSION}.tar.xz"
+ PKG_DEPENDS_HOST="ccache:host gmp:host"
+ PKG_DEPENDS_TARGET="gmp"
+ PKG_LONGDESC="A C library for multiple-precision floating-point computations with exact rounding."
+
+diff --git a/packages/devel/gmp/package.mk b/packages/devel/gmp/package.mk
+--- a/packages/devel/gmp/package.mk
++++ b/packages/devel/gmp/package.mk
+@@ -6,7 +6,7 @@ PKG_VERSION="6.3.0"
+ PKG_SHA256="a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898"
+ PKG_LICENSE="LGPLv3+"
+ PKG_SITE="http://gmplib.org/"
+-PKG_URL="https://gmplib.org/download/gmp/${PKG_NAME}-${PKG_VERSION}.tar.xz"
++PKG_URL="https://ftp.gnu.org/gnu/gmp/${PKG_NAME}-${PKG_VERSION}.tar.xz"
+ PKG_DEPENDS_HOST="ccache:host m4:host"
+ PKG_DEPENDS_TARGET="toolchain"
+ PKG_LONGDESC="A library for arbitrary precision arithmetic, operating on signed integers, rational numbers, and floating point numbers."
+@@ -17,4 +17,5 @@ PKG_CONFIGURE_OPTS_HOST="--enable-cxx --enable-static --disable-shared"
+
+ pre_configure_host() {
+   export CPPFLAGS="${CPPFLAGS} -fexceptions"
++  export CFLAGS="${CFLAGS} -std=gnu17"
+ }
+
+diff --git a/packages/devel/make/package.mk b/packages/devel/make/package.mk
+--- a/packages/devel/make/package.mk
++++ b/packages/devel/make/package.mk
+@@ -7,7 +7,7 @@ PKG_SHA256="dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3"
+ PKG_LICENSE="GPLv3"
+ PKG_SITE="https://www.gnu.org/software/make/"
+-PKG_URL="http://ftpmirror.gnu.org/make/${PKG_NAME}-${PKG_VERSION}.tar.gz"
++PKG_URL="https://ftp.gnu.org/gnu/make/${PKG_NAME}-${PKG_VERSION}.tar.gz"
+ PKG_DEPENDS_HOST=""
+ PKG_LONGDESC="Utility to maintain groups of programs."
+ PKG_BUILD_FLAGS="+local-cc"
+
+diff --git a/packages/devel/m4/package.mk b/packages/devel/m4/package.mk
+index 328a79a..38a33e3 100644
+--- a/packages/devel/m4/package.mk
++++ b/packages/devel/m4/package.mk
+@@ -15,3 +15,9 @@ PKG_CONFIGURE_OPTS_HOST="gl_cv_func_gettimeofday_clobber=no --target=${TARGET_NA
+ post_makeinstall_host() {
+   make prefix=${SYSROOT_PREFIX}/usr install
+ }
++
++# GCC 15+ defaults to GNU23, which is incompatible with the gnulib
++# snapshot bundled in m4 1.4.19.
++pre_configure_host() {
++  export CFLAGS+=" -std=gnu17"
++}
+diff --git a/packages/devel/pkg-config/package.mk b/packages/devel/pkg-config/package.mk
+index c6f00ad..f9c5666 100644
+--- a/packages/devel/pkg-config/package.mk
++++ b/packages/devel/pkg-config/package.mk
+@@ -19,3 +19,9 @@ post_makeinstall_host() {
+   mkdir -p ${SYSROOT_PREFIX}/usr/share/aclocal
+     cp pkg.m4 ${SYSROOT_PREFIX}/usr/share/aclocal
+ }
++
++# GCC 15+ defaults C to GNU23, where bool is a keyword.
++# The bundled legacy GLib in pkg-config 0.29.2 uses bool as an identifier.
++pre_configure_host() {
++  export CFLAGS+=" -std=gnu17"
++}
+diff --git a/packages/lang/gcc-aarch64/package.mk b/packages/lang/gcc-aarch64/package.mk
+index c5e27e8..2accd47 100644
+--- a/packages/lang/gcc-aarch64/package.mk
++++ b/packages/lang/gcc-aarch64/package.mk
+@@ -52,6 +52,12 @@ PKG_CONFIGURE_OPTS_HOST="--target=aarch64-none-elf \
+                          --disable-shared \
+                          --disable-threads"
+
++# GCC 15+ defaults to a newer C++ standard where u8 literals use char8_t.
++# GCC 13.2's bundled libcody expects pre-C++20 u8 literal semantics.
++pre_configure_host() {
++  export CXXFLAGS="${CXXFLAGS} -std=gnu++11"
++}
++
+ unpack() {
+   mkdir -p ${PKG_BUILD}
+   tar --strip-components=1 -xf ${SOURCES}/gcc/gcc-${PKG_VERSION}.tar.xz -C ${PKG_BUILD}
+diff --git a/packages/lang/gcc/package.mk b/packages/lang/gcc/package.mk
+index 41ac317..236aeab 100644
+--- a/packages/lang/gcc/package.mk
++++ b/packages/lang/gcc/package.mk
+@@ -6,7 +6,7 @@ PKG_VERSION="13.2.0"
+ PKG_SHA256="e275e76442a6067341a27f04c5c6b83d8613144004c0413528863dc6b5c743da"
+ PKG_LICENSE="GPL-2.0-or-later"
+ PKG_SITE="https://gcc.gnu.org/"
+-PKG_URL="https://ftpmirror.gnu.org/gcc/${PKG_NAME}-${PKG_VERSION}/${PKG_NAME}-${PKG_VERSION}.tar.xz"
++PKG_URL="https://ftp.gnu.org/gnu/gcc/${PKG_NAME}-${PKG_VERSION}/${PKG_NAME}-${PKG_VERSION}.tar.xz"
+ PKG_DEPENDS_BOOTSTRAP="ccache:host autoconf:host binutils:host gmp:host mpfr:host mpc:host zstd:host"
+ PKG_DEPENDS_TARGET="toolchain"
+ PKG_DEPENDS_HOST="ccache:host autoconf:host binutils:host gmp:host mpfr:host mpc:host zstd:host glibc libxcrypt"
+@@ -104,8 +104,13 @@ EOF
+     ln -sf ../gcc/${TARGET_NAME}/${GCC_VERSION}/liblto_plugin.so ${TOOLCHAIN}/lib/bfd-plugins
+ }
+
++pre_configure_bootstrap() {
++  export CXXFLAGS="${CXXFLAGS} -std=gnu++11"
++}
++
+ pre_configure_host() {
+   unset CPP
++  export CXXFLAGS="${CXXFLAGS} -std=gnu++11"
+ }
+
+ post_make_host() {
+diff --git a/packages/multimedia/rtmpdump/package.mk b/packages/multimedia/rtmpdump/package.mk
+index 8ee3a11..7f4839c 100644
+--- a/packages/multimedia/rtmpdump/package.mk
++++ b/packages/multimedia/rtmpdump/package.mk
+@@ -7,7 +7,7 @@ PKG_VERSION="f1b83c10d8beb43fcc70a6e88cf4325499f25857"
+ PKG_SHA256="c68e05989a93c002e3ba8df3baef0021c17099aa2123a9c096a5cc8e029caf95"
+ PKG_LICENSE="GPL"
+ PKG_SITE="http://rtmpdump.mplayerhq.hu/"
+-PKG_URL="http://repo.or.cz/rtmpdump.git/snapshot/${PKG_VERSION}.tar.gz"
++PKG_URL="https://mirrors.mit.edu/macports/distfiles/rtmpdump/${PKG_VERSION}.tar.gz"
+ PKG_DEPENDS_TARGET="toolchain zlib openssl"
+ PKG_LONGDESC="rtmpdump is a toolkit for RTMP streams."
+ PKG_BUILD_FLAGS="+pic"
+diff --git a/packages/network/rsync/package.mk b/packages/network/rsync/package.mk
+index 293080f..c9a6941 100644
+--- a/packages/network/rsync/package.mk
++++ b/packages/network/rsync/package.mk
+@@ -36,6 +36,7 @@ PKG_CONFIGURE_OPTS_TARGET="--disable-acl-support \
+
+ pre_configure_host() {
+   HOST_CONFIGURE_OPTS=$(echo ${HOST_CONFIGURE_OPTS} | sed -e "s|--disable-static||" -e "s|--enable-shared||")
++  export CFLAGS="${CFLAGS} -std=gnu17"
+ }
+
+ pre_configure_target() {
+diff --git a/packages/textproc/libidn2/package.mk b/packages/textproc/libidn2/package.mk
+index 2490965..a7f373e 100644
+--- a/packages/textproc/libidn2/package.mk
++++ b/packages/textproc/libidn2/package.mk
+@@ -6,7 +6,7 @@ PKG_VERSION="2.3.7"
+ PKG_SHA256="4c21a791b610b9519b9d0e12b8097bf2f359b12f8dd92647611a929e6bfd7d64"
+ PKG_LICENSE="LGPL3"
+ PKG_SITE="https://www.gnu.org/software/libidn/"
+-PKG_URL="https://ftpmirror.gnu.org/gnu/libidn/libidn2-${PKG_VERSION}.tar.gz"
++PKG_URL="https://ftp.gnu.org/gnu/libidn/libidn2-${PKG_VERSION}.tar.gz"
+ PKG_DEPENDS_HOST="toolchain:host"
+ PKG_DEPENDS_TARGET="toolchain"
+ PKG_LONGDESC="Free software implementation of IDNA2008, Punycode and TR46."
+
+diff --git a/distributions/CoreELEC/options b/distributions/CoreELEC/options
+--- a/distributions/CoreELEC/options
++++ b/distributions/CoreELEC/options
+@@ -42,6 +42,6 @@
+   HARDENING_SUPPORT="no"
+
+ # Default supported get handlers (archive, git, file etc.)
+-  GET_HANDLER_SUPPORT="archive"
++  GET_HANDLER_SUPPORT="archive file"
+
+ # use local ccache on build host, if available, for early package

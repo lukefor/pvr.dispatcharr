@@ -15,6 +15,22 @@ set(ADDON_NAME "Dispatcharr PVR Client")
 
 project(${ADDON_ID} LANGUAGES CXX)
 
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(hls_playlist_test
+    tests/hls_playlist_test.cpp
+    src/recording/hls_playlist.cpp
+  )
+  target_include_directories(hls_playlist_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  add_test(NAME hls_playlist_test COMMAND hls_playlist_test)
+  add_executable(epg_recording_match_test
+    tests/epg_recording_match_test.cpp
+    src/recording/epg_recording_match.cpp
+  )
+  target_include_directories(epg_recording_match_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  add_test(NAME epg_recording_match_test COMMAND epg_recording_match_test)
+endif()
+
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR})
 
 # Try to use Kodi's official addon build system when available.
@@ -26,6 +42,13 @@ if(Kodi_FOUND)
   # Read version from version.txt (after project() declaration)
   file(READ ${CMAKE_CURRENT_SOURCE_DIR}/version.txt ADDON_VERSION)
   string(STRIP "${ADDON_VERSION}" ADDON_VERSION)
+
+  # Kodi 21's addon_version() expects a literal numeric version in
+  # addon.xml.in. Override it so version.txt remains the source of truth.
+  macro(addon_version dir prefix)
+    set(${prefix}_VERSION "${ADDON_VERSION}")
+    message(STATUS "${prefix}_VERSION=${${prefix}_VERSION}")
+  endmacro()
   
   set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -77,6 +100,9 @@ if(Kodi_FOUND)
     src/addon.cpp
     src/xtream_client.cpp
     src/dispatcharr_client.cpp
+    src/recording/hls_playlist.cpp
+    src/recording/growing_recorded_stream.cpp
+    src/recording/epg_recording_match.cpp
   )
 
   set(XTC_HEADERS
@@ -136,6 +162,9 @@ else()
       src/addon.cpp
       src/xtream_client.cpp
       src/dispatcharr_client.cpp
+      src/recording/hls_playlist.cpp
+      src/recording/growing_recorded_stream.cpp
+      src/recording/epg_recording_match.cpp
       src/pugixml/pugixml.cpp
     )
   else()
@@ -143,6 +172,9 @@ else()
       src/addon.cpp
       src/xtream_client.cpp
       src/dispatcharr_client.cpp
+      src/recording/hls_playlist.cpp
+      src/recording/growing_recorded_stream.cpp
+      src/recording/epg_recording_match.cpp
       src/pugixml/pugixml.cpp
     )
   endif()
