@@ -624,13 +624,18 @@ public:
     return PVR_ERROR_NO_ERROR;
   }
 
-  bool OpenRecordedStream(const kodi::addon::PVRRecording& recording) override
+  // Kodi 22 (PVR API 9.2) passes a stream id to every recorded-stream call.
+  // We don't set SupportsMultipleRecordedStreams, so Kodi closes the previous
+  // stream before opening another and the id can be ignored; the legacy
+  // IsRealTimeStream/CanPauseStream/GetStreamTimes callbacks still apply.
+  bool OpenRecordedStream(const kodi::addon::PVRRecording& recording, int64_t& streamId) override
   {
     if (!m_dispatcharrClient)
       return false;
     int id = 0;
     try { id = std::stoi(recording.GetRecordingId()); }
     catch (...) { return false; }
+    streamId = id;
 
     dispatcharr::Recording info;
     if (!m_dispatcharrClient->GetRecording(id, info))
@@ -660,24 +665,24 @@ public:
     return true;
   }
 
-  void CloseRecordedStream() override
+  void CloseRecordedStream(int64_t /*streamId*/) override
   {
     if (m_activeRecordedStream)
       m_activeRecordedStream->Close();
     m_activeRecordedStream.reset();
   }
 
-  int ReadRecordedStream(unsigned char* buffer, unsigned int size) override
+  int ReadRecordedStream(int64_t /*streamId*/, unsigned char* buffer, unsigned int size) override
   {
     return m_activeRecordedStream ? m_activeRecordedStream->Read(buffer, size) : -1;
   }
 
-  int64_t SeekRecordedStream(int64_t position, int whence) override
+  int64_t SeekRecordedStream(int64_t /*streamId*/, int64_t position, int whence) override
   {
     return m_activeRecordedStream ? m_activeRecordedStream->Seek(position, whence) : -1;
   }
 
-  int64_t LengthRecordedStream() override
+  int64_t LengthRecordedStream(int64_t /*streamId*/) override
   {
     return m_activeRecordedStream ? m_activeRecordedStream->Length() : -1;
   }
